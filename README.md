@@ -12,15 +12,16 @@ This repository contains the scripts captured from the tested working PiKVM, rat
 ## Deploy after an update
 
 ```bash
-rw
 cd /root/pikvm-x735
-git pull --ff-only
+git pull --ff-only   # needs / writable: run `rw` first, `ro` after
 ./deploy.sh
-# installer restores read-only mode only if it was read-only on entry
-ro
 ```
 
-The installer backs up the deployed files **and `/boot/config.txt`**, installs the GPIO13 PWM overlay if missing, comments out an active `dtparam=act_led_gpio=13`, installs the scripts and units, validates the merged KVMD configuration, disables `kvmd-fan` if present, and enables the X735 services. If it modified boot configuration, **reboot** before expecting PWM fan operation: the installer intentionally skips restarting the X735 services in this case. If no boot change was necessary, it restarts them. It does **not** automatically restart KVMD, because doing so interrupts capture and UART controls. The script refuses conflicting PWM overlays and requires manual resolution.
+`deploy.sh` records the read-only state of `/` and `/boot` independently before writing, makes `/boot` writable only if `config.txt` must change, and restores each mount to its original state on exit.
+
+The installer backs up the deployed files **and `/boot/config.txt`**, installs the GPIO13 PWM overlay if missing, comments out an active `dtparam=act_led_gpio=13`, installs the scripts and units, validates the merged KVMD configuration, **masks** `kvmd-fan` if present, and enables the X735 services. If it modified boot configuration, **reboot** before expecting PWM fan operation: the installer intentionally skips restarting the X735 services in this case. Otherwise each X735 service is restarted **only if its installed script or unit actually changed** (compared with `cmp`), or started if it was not running. An unchanged, running `x735-pwr` is never restarted, so a no-change deploy does not touch the GPIO12 handshake. It does **not** automatically restart KVMD, because doing so interrupts capture and UART controls. The script refuses conflicting PWM overlays and requires manual resolution.
+
+After deploying, report-only checks verify: GPIO5 not claimed by KVMD, GPIO12 output HIGH and held by `gpioset`, PWM0_1 active on GPIO13 via `pwmchip0` = `fe20c000.pwm` (skipped when a reboot is pending), and `kvmd-fan` masked and inactive. Failures exit with status 2 but never restart the power daemon.
 
 ## Required boot configuration
 
@@ -35,7 +36,7 @@ Do not assign `act_led_gpio=13`; GPIO 18 belongs to I2S audio. On first deploy, 
 ## GPIO allocation
 
 - BCM5: X735 button event input; must not be claimed by PiKVM V3 USB breaker.
-- BCM12: X735 handshake output held by persistent `gpioset`.
+- BCM12: X735 handshake output held by persistent `gpioset`. Also the default PWM pin of PiKVM's `kvmd-fan` (`--pwm-pin 12`), which is why `kvmd-fan` is masked; a restart of `x735-pwr` briefly releases this line.
 - BCM13: X735 PWM fan (`pwmchip0/pwm1`).
 - BCM20: X735 software-off, shared with TC358743 PCM_DIN; only hand off during intentional shutdown.
 
