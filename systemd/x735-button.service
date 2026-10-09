@@ -1,0 +1,15 @@
+[Unit]
+Description=Geekworm X735 power button handler (GPIO5 edge events)
+Wants=x735-boot.service
+After=x735-boot.service
+
+[Service]
+Type=simple
+Environment=X735_ACTION=log
+ExecStart=/usr/local/bin/x735-button.sh
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -50,6 +50,9 @@ pulse 0.75    # poweroff, triggered at 600 ms while still held
 pulse 1.50    # poweroff, triggered at 600 ms while still held
 # Bounce: a 1-3 ms dip inside a 400 ms press must stay one reboot pulse.
 set_line 1; sleep 0.15; set_line 0; sleep 0.002; set_line 1; sleep 0.25; set_line 0; sleep 0.8
+# Replay of the observed unanswered shutdown request: GPIO5 stayed high ~48 s.
+# Default 5 s keeps the test short; X735_TEST_HOLD=48 replays it in full.
+pulse "${X735_TEST_HOLD:-5}"
 sleep 5       # idle, for the CPU sample
 end_cpu=$(cpu_ticks)
 
@@ -58,7 +61,7 @@ cat "$log"
 echo '--- results'
 
 mapfile -t got < <(grep -oE 'pulse [0-9]+ms: (ignored|reboot|poweroff)|pulse held >600ms: poweroff' "$log")
-expect=(ignored reboot reboot held held reboot)
+expect=(ignored reboot reboot held held reboot held)
 fails=0
 for i in "${!expect[@]}"; do
     g=${got[$i]:-<missing>}
@@ -70,5 +73,10 @@ for i in "${!expect[@]}"; do
 done
 (( ${#got[@]} == ${#expect[@]} )) || { echo "FAIL: ${#got[@]} classified pulses, expected ${#expect[@]}"; fails=$((fails + 1)); }
 grep -q 'not executed' "$log" || { echo 'FAIL: no monitor-mode suppression logged'; fails=$((fails + 1)); }
+# Each held pulse must act once, not repeatedly while the line stays high.
+held_count=$(grep -c 'pulse held >600ms' "$log" || true)
+(( held_count == 3 )) || { echo "FAIL: $held_count held-pulse actions, expected 3"; fails=$((fails + 1)); }
+last_end=$(grep -oE 'pulse ended after [0-9]+ms' "$log" | tail -1)
+echo "long hold: $last_end"
 echo "handler CPU over test (bash + gpiomon): $(( end_cpu - start_cpu )) ticks at $(getconf CLK_TCK)/s"
 (( fails == 0 )) && echo 'ALL PASS' || { echo "$fails failure(s)"; exit 1; }

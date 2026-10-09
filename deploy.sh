@@ -4,11 +4,16 @@ set -euo pipefail
 cd "$(dirname "$(realpath "$0")")"
 [[ $EUID -eq 0 ]] || { echo 'Run as root' >&2; exit 1; }
 
-for src in scripts/x735-fan.sh scripts/x735-pwr.sh scripts/x735off systemd/x735-fan.service systemd/x735-pwr.service pikvm/x735.yaml; do
+# pwr: legacy single x735-pwr (default). split: x735-boot holds GPIO12,
+# x735-button handles GPIO5. Switching takes effect at the next reboot.
+mode=${X735_POWER_DAEMON:-pwr}
+[[ $mode == pwr || $mode == split ]] || { echo "X735_POWER_DAEMON must be pwr or split" >&2; exit 1; }
+
+for src in scripts/x735-fan.sh scripts/x735-pwr.sh scripts/x735-button.sh scripts/x735off systemd/x735-fan.service systemd/x735-pwr.service systemd/x735-boot.service systemd/x735-button.service pikvm/x735.yaml; do
     [[ -s "$src" ]] || { echo "Missing/empty: $src (capture the working Pi first)" >&2; exit 1; }
 done
 command -v gpioset >/dev/null || { echo 'Missing libgpiod tools' >&2; exit 1; }
-bash -n scripts/x735-fan.sh scripts/x735-pwr.sh scripts/x735off
+bash -n scripts/x735-fan.sh scripts/x735-pwr.sh scripts/x735-button.sh scripts/x735off
 [[ -f /boot/config.txt ]] || { echo 'Missing /boot/config.txt' >&2; exit 1; }
 
 # Refuse potentially conflicting PWM overlays rather than guessing a repair.
@@ -52,7 +57,7 @@ if (( root_was_ro )); then mount -o remount,rw /; fi
 stamp=$(date +%Y%m%d-%H%M%S)
 backup="/root/x735-deploy-backups/$stamp"
 mkdir -p "$backup"
-for file in /usr/local/bin/x735-fan.sh /usr/local/bin/x735-pwr.sh /usr/local/bin/x735off /etc/systemd/system/x735-fan.service /etc/systemd/system/x735-pwr.service /etc/kvmd/override.d/x735.yaml /boot/config.txt; do
+for file in /usr/local/bin/x735-fan.sh /usr/local/bin/x735-pwr.sh /usr/local/bin/x735-button.sh /usr/local/bin/x735off /etc/systemd/system/x735-fan.service /etc/systemd/system/x735-pwr.service /etc/systemd/system/x735-boot.service /etc/systemd/system/x735-button.service /etc/kvmd/override.d/x735.yaml /boot/config.txt; do
     if [[ -e "$file" ]]; then
         mkdir -p "$backup$(dirname "$file")"
         cp -a "$file" "$backup$file"
@@ -89,6 +94,11 @@ cmp -s scripts/x735-fan.sh /usr/local/bin/x735-fan.sh || fan_changed=1
 cmp -s systemd/x735-fan.service /etc/systemd/system/x735-fan.service || fan_changed=1
 cmp -s scripts/x735-pwr.sh /usr/local/bin/x735-pwr.sh || pwr_changed=1
 cmp -s systemd/x735-pwr.service /etc/systemd/system/x735-pwr.service || pwr_changed=1
+button_changed=0
+boot_unit_changed=0
+cmp -s scripts/x735-button.sh /usr/local/bin/x735-button.sh || button_changed=1
+cmp -s systemd/x735-button.service /etc/systemd/system/x735-button.service || button_changed=1
+cmp -s systemd/x735-boot.service /etc/systemd/system/x735-boot.service || boot_unit_changed=1
 
 # Replacing an unchanged script that a daemon is executing leaves the old inode
 # open, which blocks remounting / read-only. Only touch files that differ.
@@ -97,9 +107,12 @@ install_if_changed() {
 }
 install_if_changed 0755 scripts/x735-fan.sh /usr/local/bin/x735-fan.sh
 install_if_changed 0755 scripts/x735-pwr.sh /usr/local/bin/x735-pwr.sh
+install_if_changed 0755 scripts/x735-button.sh /usr/local/bin/x735-button.sh
 install_if_changed 0755 scripts/x735off /usr/local/bin/x735off
 install_if_changed 0644 systemd/x735-fan.service /etc/systemd/system/x735-fan.service
 install_if_changed 0644 systemd/x735-pwr.service /etc/systemd/system/x735-pwr.service
+install_if_changed 0644 systemd/x735-boot.service /etc/systemd/system/x735-boot.service
+install_if_changed 0644 systemd/x735-button.service /etc/systemd/system/x735-button.service
 install_if_changed 0644 pikvm/x735.yaml /etc/kvmd/override.d/x735.yaml
 
 if ! kvmd -m >/dev/null; then
@@ -117,7 +130,14 @@ fi
 if grep -Eqs 'pwm[-_]pin' /etc/kvmd/fan.ini /etc/conf.d/kvmd-fan; then
     echo 'NOTE: custom kvmd-fan pin configured; kvmd-fan is masked regardless.'
 fi
-systemctl enable x735-fan.service x735-pwr.service
+systemctl enable x735-fan.service
+if [[ $mode == split ]]; then
+    systemctl enable x735-boot.service x735-button.service
+    systemctl disable x735-pwr.service
+else
+    systemctl enable x735-pwr.service
+    systemctl disable x735-boot.service x735-button.service 2>/dev/null || true
+fi
 
 apply_service() {
     local unit=$1 changed=$2
@@ -132,15 +152,37 @@ apply_service() {
     fi
 }
 
+# Both designs claim GPIO5 and GPIO12, so they must never run together.
+# A switch between them is only enabled here and takes effect at reboot.
+legacy_active=0
+split_active=0
+systemctl is-active --quiet x735-pwr.service && legacy_active=1
+if systemctl is-active --quiet x735-boot.service || systemctl is-active --quiet x735-button.service; then
+    split_active=1
+fi
+switch_pending=0
+if [[ $mode == split ]] && (( legacy_active )); then switch_pending=1; fi
+if [[ $mode == pwr ]] && (( split_active )); then switch_pending=1; fi
+
 if (( boot_changed )); then
     echo "Updated /boot/config.txt; REBOOT REQUIRED to activate GPIO13 PWM."
     echo "Services enabled; not restarting hardware controllers before reboot."
 else
     apply_service x735-fan.service "$fan_changed"
-    if (( pwr_changed )) && systemctl is-active --quiet x735-pwr.service; then
-        echo 'WARNING: x735-pwr changed; restart briefly releases the GPIO12 handshake.'
+    if (( switch_pending )); then
+        echo "Power daemon set to '$mode'; REBOOT to switch over. The running daemon is left untouched."
+    elif [[ $mode == split ]]; then
+        if (( boot_unit_changed )) && systemctl is-active --quiet x735-boot.service; then
+            echo 'WARNING: x735-boot changed; restart briefly releases the GPIO12 handshake.'
+        fi
+        apply_service x735-boot.service "$boot_unit_changed"
+        apply_service x735-button.service "$button_changed"
+    else
+        if (( pwr_changed )) && systemctl is-active --quiet x735-pwr.service; then
+            echo 'WARNING: x735-pwr changed; restart briefly releases the GPIO12 handshake.'
+        fi
+        apply_service x735-pwr.service "$pwr_changed"
     fi
-    apply_service x735-pwr.service "$pwr_changed"
 fi
 
 # Report-only checks: failures never trigger a restart of the power daemon.
@@ -157,8 +199,9 @@ fi
 
 pin12=$(pinctrl get 12 2>&1 || true)
 line12=$(gpioinfo -c gpiochip0 12 2>&1 || true)
-if [[ "$pin12" =~ ^\ *12:\ op.*\|\ hi ]] && [[ "$line12" == *'consumer="gpioset"'* ]]; then
-    ok 'GPIO12 output HIGH, held by gpioset'
+if [[ "$pin12" =~ ^\ *12:\ op.*\|\ hi ]] &&
+   [[ "$line12" == *'consumer="gpioset"'* || "$line12" == *'consumer="x735-boot"'* ]]; then
+    ok "GPIO12 output HIGH, held by ${line12##*consumer=}"
 else
     fail "GPIO12 handshake not asserted: $pin12"
 fi
