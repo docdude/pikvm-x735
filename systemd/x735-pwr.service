@@ -1,0 +1,14 @@
+[Unit]
+Description=Geekworm X735 v3.0 Power Management
+After=multi-user.target
+
+[Service]
+Type=simple
+Environment=X735_ACTION=live
+ExecStart=/usr/local/bin/x735-pwr.sh
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

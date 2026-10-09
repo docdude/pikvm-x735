@@ -1,0 +1,51 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+I2S_DEV=fe203000.i2s
+I2S_DRIVER=/sys/bus/platform/drivers/bcm2835-i2s
+CHIP=/dev/gpiochip0
+
+restore_audio() {
+    if [ ! -L "$I2S_DRIVER/$I2S_DEV" ]; then
+        echo "$I2S_DEV" > "$I2S_DRIVER/bind" || true
+    fi
+}
+trap restore_audio EXIT
+
+# Only proceed with the live power-management daemon.
+if ! systemctl is-active --quiet x735-pwr; then
+    echo "ERROR: x735-pwr is not active"
+    exit 1
+fi
+
+if ! systemctl show x735-pwr -p Environment --value |
+     grep -q 'X735_ACTION=live'; then
+    echo "ERROR: x735-pwr is not in live mode"
+    exit 1
+fi
+
+echo "Syncing filesystems..."
+sync
+
+echo "Releasing HDMI audio I2S pins..."
+if [ -L "$I2S_DRIVER/$I2S_DEV" ]; then
+    echo "$I2S_DEV" > "$I2S_DRIVER/unbind"
+fi
+
+# Verify that GPIO20 is no longer owned by I2S.
+if grep 'pin 20 ' /sys/kernel/debug/pinctrl/*/pinmux-pins |
+   grep -q 'fe203000.i2s'; then
+    echo "ERROR: GPIO20 still owned by I2S"
+    echo "$I2S_DEV" > "$I2S_DRIVER/bind" || true
+    exit 1
+fi
+
+echo "Requesting X735 software shutdown..."
+
+# Hold GPIO20 high for four seconds, then return it low.
+gpioset -c "$CHIP" -t 4s,0 20=1
+
+# If the Pi is still running, restore HDMI audio.
+if [ ! -L "$I2S_DRIVER/$I2S_DEV" ]; then
+    echo "$I2S_DEV" > "$I2S_DRIVER/bind" || true
+fi

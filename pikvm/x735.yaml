@@ -1,0 +1,13 @@
+kvmd:
+    gpio:
+        drivers:
+            unused_breaker:
+                type: cmd
+                cmd: [/usr/bin/true]
+        scheme:
+            __v3_usb_breaker__:
+                driver: unused_breaker
+                pin: 0
+                mode: output
+                initial: false
+                switch: true
