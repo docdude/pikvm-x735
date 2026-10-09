@@ -32,10 +32,18 @@ is_ro / && root_was_ro=1
 mountpoint -q /boot && is_ro /boot && boot_was_ro=1
 
 cleanup() {
+    local rc=$?
     set +e
     sync
-    if (( boot_made_rw )); then mount -o remount,ro /boot; fi
-    if (( root_was_ro )); then mount -o remount,ro /; fi
+    if (( boot_made_rw )) && ! mount -o remount,ro /boot; then
+        echo 'WARNING: could not restore /boot read-only' >&2
+        (( rc )) || rc=3
+    fi
+    if (( root_was_ro )) && ! mount -o remount,ro /; then
+        echo 'WARNING: could not restore / read-only (a deleted file is still open); it returns to ro on reboot' >&2
+        (( rc )) || rc=3
+    fi
+    exit "$rc"
 }
 trap cleanup EXIT
 
@@ -82,12 +90,17 @@ cmp -s systemd/x735-fan.service /etc/systemd/system/x735-fan.service || fan_chan
 cmp -s scripts/x735-pwr.sh /usr/local/bin/x735-pwr.sh || pwr_changed=1
 cmp -s systemd/x735-pwr.service /etc/systemd/system/x735-pwr.service || pwr_changed=1
 
-install -Dm0755 scripts/x735-fan.sh /usr/local/bin/x735-fan.sh
-install -Dm0755 scripts/x735-pwr.sh /usr/local/bin/x735-pwr.sh
-install -Dm0755 scripts/x735off /usr/local/bin/x735off
-install -Dm0644 systemd/x735-fan.service /etc/systemd/system/x735-fan.service
-install -Dm0644 systemd/x735-pwr.service /etc/systemd/system/x735-pwr.service
-install -Dm0644 pikvm/x735.yaml /etc/kvmd/override.d/x735.yaml
+# Replacing an unchanged script that a daemon is executing leaves the old inode
+# open, which blocks remounting / read-only. Only touch files that differ.
+install_if_changed() {
+    cmp -s "$2" "$3" || install -Dm"$1" "$2" "$3"
+}
+install_if_changed 0755 scripts/x735-fan.sh /usr/local/bin/x735-fan.sh
+install_if_changed 0755 scripts/x735-pwr.sh /usr/local/bin/x735-pwr.sh
+install_if_changed 0755 scripts/x735off /usr/local/bin/x735off
+install_if_changed 0644 systemd/x735-fan.service /etc/systemd/system/x735-fan.service
+install_if_changed 0644 systemd/x735-pwr.service /etc/systemd/system/x735-pwr.service
+install_if_changed 0644 pikvm/x735.yaml /etc/kvmd/override.d/x735.yaml
 
 if ! kvmd -m >/dev/null; then
     echo "KVMD configuration validation failed; files backed up at $backup" >&2
