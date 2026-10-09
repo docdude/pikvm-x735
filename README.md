@@ -8,8 +8,6 @@ For a Raspberry Pi 4B using PiKVM OS, a Geekworm X735 v3.0, CSI TC358743 video/a
 
 1. Unpack or clone this project onto PiKVM; run `./capture-live.sh` as root.
 2. Inspect `git diff` / `git status` and confirm the captured files, particularly live-mode settings and shutdown behavior.
-3. Create an empty `docdude/pikvm-x735` repository on GitHub.
-4. `git init -b main && git add . && git commit -m 'Capture tested X735 integration' && git remote add origin git@github.com:docdude/pikvm-x735.git && git push -u origin main` (or use HTTPS authentication).
 
 ## Deploy after an update
 
