@@ -2,7 +2,7 @@
 
 For a Raspberry Pi 4B using PiKVM OS, a Geekworm X735 v3.0, CSI TC358743 video/audio, USB SSD, and separate HKS401 UART integration.
 
-**Important:** This repository template intentionally does *not* bundle guessed copies of the live scripts. On the already-working PiKVM, run `./capture-live.sh` to capture the exact tested installed scripts and systemd units before committing. This is critical for power management.
+This repository contains the scripts captured from the tested working PiKVM, rather than reconstructed examples. Use `./capture-live.sh` only when intentionally refreshing these sources from a known-good running system.
 
 ## Bootstrap on the working PiKVM
 
@@ -20,7 +20,7 @@ git pull --ff-only
 ro
 ```
 
-The installer backs up existing deployed files, checks the PWM overlay, deploys scripts and units, validates merged KVMD settings, enables and restarts the X735 services. It deliberately does **not** restart KVMD; restart it only if required for the breaker override, since that interrupts capture controls.
+The installer backs up the deployed files **and `/boot/config.txt`**, installs the GPIO13 PWM overlay if missing, comments out an active `dtparam=act_led_gpio=13`, installs the scripts and units, validates the merged KVMD configuration, disables `kvmd-fan` if present, and enables the X735 services. If it modified boot configuration, **reboot** before expecting PWM fan operation: the installer intentionally skips restarting the X735 services in this case. If no boot change was necessary, it restarts them. It does **not** automatically restart KVMD, because doing so interrupts capture and UART controls. The script refuses conflicting PWM overlays and requires manual resolution.
 
 ## Required boot configuration
 
@@ -30,7 +30,7 @@ Your tested working configuration uses:
 dtoverlay=pwm,pin=13,func=4
 ```
 
-Do not assign `act_led_gpio=13`; GPIO 18 belongs to I2S audio. `tc358743-audio` owns GPIO 20 during ordinary operation; `x735off` temporarily unbinds and rebinds `bcm2835-i2s` to issue the software shutdown signal.
+Do not assign `act_led_gpio=13`; GPIO 18 belongs to I2S audio. On first deploy, inspect the backup of `/boot/config.txt` and reboot if the installer reports changes. The installer does not automatically remove unrelated device-tree overlays. `tc358743-audio` owns GPIO 20 during ordinary operation; `x735off` temporarily unbinds and rebinds `bcm2835-i2s` to issue the software shutdown signal.
 
 ## GPIO allocation
 
