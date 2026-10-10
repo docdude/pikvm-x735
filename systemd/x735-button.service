@@ -5,7 +5,7 @@ After=x735-boot.service
 
 [Service]
 Type=simple
-Environment=X735_ACTION=log
+Environment=X735_ACTION=live
 ExecStart=/usr/local/bin/x735-button.sh
 Restart=on-failure
 RestartSec=3

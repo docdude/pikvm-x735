@@ -30,13 +30,15 @@ After deploying, report-only checks verify: GPIO5 not claimed by KVMD, GPIO12 ou
 | `pwr` (default) | `x735-pwr` | `gpioset` inside `x735-pwr.sh` | polled with `gpioget` |
 | `split` | `x735-boot`, `x735-button` | `x735-boot` (bare `gpioset -C x735-boot`) | `gpiomon` edge events in `x735-button.sh` |
 
-In split mode the button handler can be changed and restarted without releasing GPIO12. Both designs claim GPIO5 and GPIO12, so they must never run together: `deploy.sh` only *enables* the selected design while the other is running and reports `REBOOT to switch over`; it never stops the running daemon. Switch with `X735_POWER_DAEMON=split ./deploy.sh` then reboot; roll back with `X735_POWER_DAEMON=pwr ./deploy.sh` then reboot. Run every later deploy with the same `X735_POWER_DAEMON` value. `x735-button.service` ships with `X735_ACTION=log`.
+In split mode the button handler can be changed and restarted without releasing GPIO12. Both designs claim GPIO5 and GPIO12, so they must never run together: `deploy.sh` only *enables* the selected design while the other is running and reports `REBOOT to switch over`; it never stops the running daemon. Switch with `X735_POWER_DAEMON=split ./deploy.sh` then reboot; roll back with `X735_POWER_DAEMON=pwr ./deploy.sh` then reboot. Run every later deploy with the same `X735_POWER_DAEMON` value. `x735-button.service` ships with `X735_ACTION=live`; set it to `log` in the unit to observe presses without acting on them.
 
 ### Testing the button handler
 
 `tests/test-x735-button.sh` loads `gpio-mockup` and drives exact pulses through a simulated chip in log mode, never touching real GPIO: 100/300/500/750/1500 ms, a bounced 400 ms press, a line already high at start, and a replay of the observed unanswered shutdown request (GPIO5 high ~48 s after a 632 ms detection; default 5 s, `X735_TEST_HOLD=48` for the full replay). Each held pulse must act exactly once.
 
 On real hardware in log mode, test **only short (reboot-length) presses**. An unanswered long press is not a safe test: GPIO5 cleared after ~48 s in earlier testing, but whether the X735 cuts power at that point is not established. Perform the first real long press with `X735_ACTION=live`, so Linux shuts down cleanly.
+
+Hardware result in log mode (split daemon): a reboot-length press measured 490 ms, was classified as reboot and not executed; GPIO12 stayed high throughout (sampled every 50 ms).
 
 ## Required boot configuration
 
