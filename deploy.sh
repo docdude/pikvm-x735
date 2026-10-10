@@ -55,7 +55,7 @@ trap cleanup EXIT
 if (( root_was_ro )); then mount -o remount,rw /; fi
 
 stamp=$(date +%Y%m%d-%H%M%S)
-backup="/root/x735-deploy-backups/$stamp"
+backup="/home/pikvm-x735-backups/$stamp"
 mkdir -p "$backup"
 for file in /usr/local/bin/x735-chip /usr/local/bin/x735-boot.sh /usr/local/bin/x735-fan.sh /usr/local/bin/x735-pwr.sh /usr/local/bin/x735-button.sh /usr/local/bin/x735off /etc/systemd/system/x735-fan.service /etc/systemd/system/x735-pwr.service /etc/systemd/system/x735-boot.service /etc/systemd/system/x735-button.service /etc/kvmd/override.d/x735.yaml /boot/config.txt; do
     if [[ -e "$file" ]]; then

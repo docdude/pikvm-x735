@@ -12,7 +12,7 @@ This repository contains the scripts captured from the tested working PiKVM, rat
 ## Deploy after an update
 
 ```bash
-cd /root/pikvm-x735
+cd /home/pikvm-x735
 git pull --ff-only   # needs / writable: run `rw` first, `ro` after
 ./deploy.sh
 ```
