@@ -9,11 +9,11 @@ cd "$(dirname "$(realpath "$0")")"
 mode=${X735_POWER_DAEMON:-pwr}
 [[ $mode == pwr || $mode == split ]] || { echo "X735_POWER_DAEMON must be pwr or split" >&2; exit 1; }
 
-for src in scripts/x735-fan.sh scripts/x735-pwr.sh scripts/x735-button.sh scripts/x735off systemd/x735-fan.service systemd/x735-pwr.service systemd/x735-boot.service systemd/x735-button.service pikvm/x735.yaml; do
+for src in scripts/x735-chip scripts/x735-boot.sh scripts/x735-fan.sh scripts/x735-pwr.sh scripts/x735-button.sh scripts/x735off systemd/x735-fan.service systemd/x735-pwr.service systemd/x735-boot.service systemd/x735-button.service pikvm/x735.yaml; do
     [[ -s "$src" ]] || { echo "Missing/empty: $src (capture the working Pi first)" >&2; exit 1; }
 done
 command -v gpioset >/dev/null || { echo 'Missing libgpiod tools' >&2; exit 1; }
-bash -n scripts/x735-fan.sh scripts/x735-pwr.sh scripts/x735-button.sh scripts/x735off
+bash -n scripts/x735-chip scripts/x735-boot.sh scripts/x735-fan.sh scripts/x735-pwr.sh scripts/x735-button.sh scripts/x735off
 [[ -f /boot/config.txt ]] || { echo 'Missing /boot/config.txt' >&2; exit 1; }
 
 # Refuse potentially conflicting PWM overlays rather than guessing a repair.
@@ -57,7 +57,7 @@ if (( root_was_ro )); then mount -o remount,rw /; fi
 stamp=$(date +%Y%m%d-%H%M%S)
 backup="/root/x735-deploy-backups/$stamp"
 mkdir -p "$backup"
-for file in /usr/local/bin/x735-fan.sh /usr/local/bin/x735-pwr.sh /usr/local/bin/x735-button.sh /usr/local/bin/x735off /etc/systemd/system/x735-fan.service /etc/systemd/system/x735-pwr.service /etc/systemd/system/x735-boot.service /etc/systemd/system/x735-button.service /etc/kvmd/override.d/x735.yaml /boot/config.txt; do
+for file in /usr/local/bin/x735-chip /usr/local/bin/x735-boot.sh /usr/local/bin/x735-fan.sh /usr/local/bin/x735-pwr.sh /usr/local/bin/x735-button.sh /usr/local/bin/x735off /etc/systemd/system/x735-fan.service /etc/systemd/system/x735-pwr.service /etc/systemd/system/x735-boot.service /etc/systemd/system/x735-button.service /etc/kvmd/override.d/x735.yaml /boot/config.txt; do
     if [[ -e "$file" ]]; then
         mkdir -p "$backup$(dirname "$file")"
         cp -a "$file" "$backup$file"
@@ -99,12 +99,20 @@ boot_unit_changed=0
 cmp -s scripts/x735-button.sh /usr/local/bin/x735-button.sh || button_changed=1
 cmp -s systemd/x735-button.service /etc/systemd/system/x735-button.service || button_changed=1
 cmp -s systemd/x735-boot.service /etc/systemd/system/x735-boot.service || boot_unit_changed=1
+cmp -s scripts/x735-boot.sh /usr/local/bin/x735-boot.sh || boot_unit_changed=1
+# The resolver runs at fan/button start, so a change requires their restart.
+if ! cmp -s scripts/x735-chip /usr/local/bin/x735-chip; then
+    fan_changed=1
+    button_changed=1
+fi
 
 # Replacing an unchanged script that a daemon is executing leaves the old inode
 # open, which blocks remounting / read-only. Only touch files that differ.
 install_if_changed() {
     cmp -s "$2" "$3" || install -Dm"$1" "$2" "$3"
 }
+install_if_changed 0755 scripts/x735-chip /usr/local/bin/x735-chip
+install_if_changed 0755 scripts/x735-boot.sh /usr/local/bin/x735-boot.sh
 install_if_changed 0755 scripts/x735-fan.sh /usr/local/bin/x735-fan.sh
 install_if_changed 0755 scripts/x735-pwr.sh /usr/local/bin/x735-pwr.sh
 install_if_changed 0755 scripts/x735-button.sh /usr/local/bin/x735-button.sh
@@ -172,10 +180,14 @@ else
     if (( switch_pending )); then
         echo "Power daemon set to '$mode'; REBOOT to switch over. The running daemon is left untouched."
     elif [[ $mode == split ]]; then
-        if (( boot_unit_changed )) && systemctl is-active --quiet x735-boot.service; then
-            echo 'WARNING: x735-boot changed; restart briefly releases the GPIO12 handshake.'
+        # Never restart a running x735-boot: GPIO12 is not released at runtime.
+        if ! systemctl is-active --quiet x735-boot.service; then
+            apply_service x735-boot.service 0
+        elif (( boot_unit_changed )); then
+            echo 'x735-boot changed; new ExecStart applies at next reboot (GPIO12 not released now).'
+        else
+            echo 'x735-boot.service unchanged and running; not restarted.'
         fi
-        apply_service x735-boot.service "$boot_unit_changed"
         apply_service x735-button.service "$button_changed"
     else
         if (( pwr_changed )) && systemctl is-active --quiet x735-pwr.service; then
@@ -190,15 +202,24 @@ problems=0
 fail() { echo "CHECK FAIL: $*" >&2; problems=$((problems + 1)); }
 ok() { echo "check ok:   $*"; }
 
-line5=$(gpioinfo -c gpiochip0 5 2>&1 || true)
-if [[ "$line5" == *'consumer="kvmd'* ]]; then
+if gpio_chip=$(/usr/local/bin/x735-chip gpio 2>&1); then
+    ok "GPIO controller resolved: $gpio_chip"
+else
+    fail "GPIO controller: $gpio_chip"
+    gpio_chip=
+fi
+
+line5=$([[ -n $gpio_chip ]] && gpioinfo -c "$gpio_chip" 5 2>&1 || true)
+if [[ -z $gpio_chip ]]; then
+    fail 'GPIO5 not checked (no GPIO controller)'
+elif [[ "$line5" == *'consumer="kvmd'* ]]; then
     fail 'GPIO5 is claimed by KVMD (USB breaker override not effective in running kvmd)'
 else
     ok 'GPIO5 not claimed by KVMD'
 fi
 
 pin12=$(pinctrl get 12 2>&1 || true)
-line12=$(gpioinfo -c gpiochip0 12 2>&1 || true)
+line12=$([[ -n $gpio_chip ]] && gpioinfo -c "$gpio_chip" 12 2>&1 || true)
 if [[ "$pin12" =~ ^\ *12:\ op.*\|\ hi ]] &&
    [[ "$line12" == *'consumer="gpioset"'* || "$line12" == *'consumer="x735-boot"'* ]]; then
     ok "GPIO12 output HIGH, held by ${line12##*consumer=}"
@@ -209,12 +230,12 @@ fi
 pin13=$(pinctrl get 13 2>&1 || true)
 if (( boot_changed )); then
     echo 'check skip: PWM (reboot pending)'
-elif [[ "$(readlink -f /sys/class/pwm/pwmchip0/device)" != */fe20c000.pwm ]]; then
-    fail 'pwmchip0 is not the BCM2711 PWM (fe20c000.pwm)'
-elif [[ "$(cat /sys/class/pwm/pwmchip0/pwm1/enable 2>/dev/null)" != 1 || "$pin13" != *PWM0_1* ]]; then
+elif ! pwm_chip=$(/usr/local/bin/x735-chip pwm 2>&1); then
+    fail "PWM controller: $pwm_chip"
+elif [[ "$(cat "$pwm_chip/pwm1/enable" 2>/dev/null)" != 1 || "$pin13" != *PWM0_1* ]]; then
     fail "PWM not active on GPIO13: $pin13"
 else
-    ok 'PWM0_1 enabled on GPIO13 (pwmchip0/pwm1)'
+    ok "PWM0_1 enabled on GPIO13 ($pwm_chip/pwm1)"
 fi
 
 fan_units=$(systemctl list-unit-files --no-legend kvmd-fan.service 2>/dev/null || true)

@@ -4,7 +4,8 @@
 # On the Raspberry Pi, add dtoverlay=pwm-2chan to /boot/config.txt. This defaults to GPIO_18 as the pin for PWM0 and GPIO_19 as the pin for PWM1.
 PWM_CHANNEL=1
 PWM_HERTZ=2000
-PWM_CHIP_PATH=/sys/class/pwm/pwmchip0
+# pikvm-x735: resolved from the fe20c000.pwm device instead of a fixed pwmchip0.
+PWM_CHIP_PATH=$(/usr/local/bin/x735-chip pwm) || exit 1
 AUTO_CLEANUP=1 # If 1 then pwm channel is unexported on script exit, if 0 then its only stopped
 SLEEP_INTERVAL=5
 SHOW_DEBUG=0

@@ -1,9 +1,14 @@
 [Unit]
 Description=Geekworm X735 BOOT handshake (GPIO12 held high while running)
+# No Conflicts=shutdown.target: systemd does not stop this unit during
+# shutdown, so gpioset is only killed in the final stage and GPIO12 stays
+# high until just before power-off or reboot.
+DefaultDependencies=no
+After=sysinit.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/gpioset -c gpiochip0 -C x735-boot 12=1
+ExecStart=/usr/local/bin/x735-boot.sh
 Restart=always
 RestartSec=1
 

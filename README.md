@@ -28,7 +28,7 @@ After deploying, report-only checks verify: GPIO5 not claimed by KVMD, GPIO12 ou
 | `X735_POWER_DAEMON` | Units | GPIO12 (BOOT) | GPIO5 (button) |
 | --- | --- | --- | --- |
 | `pwr` (default) | `x735-pwr` | `gpioset` inside `x735-pwr.sh` | polled with `gpioget` |
-| `split` | `x735-boot`, `x735-button` | `x735-boot` (bare `gpioset -C x735-boot`) | `gpiomon` edge events in `x735-button.sh` |
+| `split` | `x735-boot`, `x735-button` | `x735-boot.sh` (`gpioset -C x735-boot`, held until the final shutdown stage) | `gpiomon` edge events in `x735-button.sh` |
 
 In split mode the button handler can be changed and restarted without releasing GPIO12. Both designs claim GPIO5 and GPIO12, so they must never run together: `deploy.sh` only *enables* the selected design while the other is running and reports `REBOOT to switch over`; it never stops the running daemon. Switch with `X735_POWER_DAEMON=split ./deploy.sh` then reboot; roll back with `X735_POWER_DAEMON=pwr ./deploy.sh` then reboot. Run every later deploy with the same `X735_POWER_DAEMON` value. `x735-button.service` ships with `X735_ACTION=live`; set it to `log` in the unit to observe presses without acting on them.
 
@@ -48,7 +48,7 @@ Hardware results in live mode (split daemon), timed against a 0.2 s ping and the
 | ~3 s press | poweroff 600 ms into the press; GPIO12 released 0.18 s later; last ping 10.7 s after poweroff began; X735 cut power ~2-3 s after that (observed dark 10-11 s after release) |
 | `x735off` | X735 shutdown pulse began ~1.35 s after GPIO20 went high; poweroff 600 ms later; last ping 10.8 s after poweroff began |
 
-After each power-off, `/` and `PIPST`/`PIMSD` were `clean` and `/boot` had no dirty bit. The X735 did not cut power when GPIO12 dropped early in shutdown; whether it waits for the Pi to halt or applies a fixed delay is not established, so holding GPIO12 until late in shutdown remains a possible margin improvement. "orphan cleanup on readonly fs" on `PIPST`/`PIMSD` appears on every boot, including after clean shutdowns, and is not a power-loss indicator.
+After each power-off, `/` and `PIPST`/`PIMSD` were `clean` and `/boot` had no dirty bit. The X735 did not cut power when GPIO12 dropped early in shutdown; whether it waits for the Pi to halt or applies a fixed delay is not established. `x735-boot` therefore uses `DefaultDependencies=no` (no `Conflicts=shutdown.target`): systemd no longer stops it during shutdown, so `gpioset` is only killed in the final stage and GPIO12 stays high until just before power-off or reboot. `deploy.sh` never restarts a running `x735-boot`; a changed `x735-boot` applies at the next reboot. "orphan cleanup on readonly fs" on `PIPST`/`PIMSD` appears on every boot, including after clean shutdowns, and is not a power-loss indicator.
 
 ## Required boot configuration
 
@@ -62,9 +62,11 @@ Do not assign `act_led_gpio=13`; GPIO 18 belongs to I2S audio. On first deploy, 
 
 ## GPIO allocation
 
+Chips are resolved by `x735-chip` from verified identifiers rather than probe-order numbers: the GPIO controller labelled `pinctrl-bcm2711` whose lines 5, 12 and 20 are named `GPIO5`/`GPIO12`/`GPIO20`, and the PWM chip whose device is `fe20c000.pwm`. It fails unless exactly one chip matches; `x735-boot`, `x735-button`, `x735-fan.sh` (one line changed from upstream) and `x735off` refuse to run rather than guess. The legacy `x735-pwr.sh` is unchanged and still uses `/dev/gpiochip0`.
+
 - BCM5: X735 button event input; must not be claimed by PiKVM V3 USB breaker. Held continuously by `gpiomon` in split mode, so no other process may request it.
-- BCM12: X735 handshake output held by persistent `gpioset` (`x735-pwr` or `x735-boot`). Also the default PWM pin of PiKVM's `kvmd-fan` (`--pwm-pin 12`), which is why `kvmd-fan` is masked; restarting the holding service briefly releases this line.
-- BCM13: X735 PWM fan (`pwmchip0/pwm1`).
+- BCM12: X735 handshake output held by persistent `gpioset` (`x735-pwr` or `x735-boot`). Also the default PWM pin of PiKVM's `kvmd-fan` (`--pwm-pin 12`), which is why `kvmd-fan` is masked. Restarting `x735-pwr` briefly releases this line; `deploy.sh` never restarts a running `x735-boot`.
+- BCM13: X735 PWM fan (channel 1 of the `fe20c000.pwm` chip).
 - BCM20: X735 software-off; also TC358743 PCM_DIN, claimed by the `bcm2835-i2s` driver. The TC358743 audio header is currently **not wired** to the Pi, so nothing else drives this line; `x735off` only needs to release the driver's pinmux claim. If the audio header is connected, the TC358743's data output and the X735 input share GPIO20 and the electrical interaction must be established before using `x735off`.
 
 ## Validate

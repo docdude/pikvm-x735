@@ -1,0 +1,52 @@
+#!/bin/bash
+# Resolve the X735's GPIO or PWM controller from verified identifiers instead
+# of probe-order numbers. Prints the chip; fails unless exactly one matches.
+set -Eeuo pipefail
+
+GPIO_LABEL=pinctrl-bcm2711
+GPIO_LINES=(5 12 20)
+PWM_DEVICE=fe20c000.pwm
+
+die() {
+    echo "x735-chip: $*" >&2
+    exit 1
+}
+
+resolve_gpio() {
+    local detect chip matches=()
+    detect=$(gpiodetect)
+    while read -r chip label _; do
+        [[ $label == "[$GPIO_LABEL]" ]] && matches+=("$chip")
+    done <<< "$detect"
+    (( ${#matches[@]} == 1 )) || die "expected one GPIO chip labelled $GPIO_LABEL, found ${#matches[@]}"
+    chip=${matches[0]}
+
+    local info line row offset name found
+    info=$(gpioinfo -c "$chip" "${GPIO_LINES[@]}")
+    for line in "${GPIO_LINES[@]}"; do
+        found=0
+        while IFS=$'\t' read -r row name _; do
+            offset=${row##* }
+            # gpioinfo pads the quoted name with spaces before the next tab.
+            [[ $offset == "$line" && ${name// /} == "\"GPIO$line\"" ]] && found=1
+        done <<< "$info"
+        (( found )) || die "$chip line $line is not named GPIO$line"
+    done
+    echo "$chip"
+}
+
+resolve_pwm() {
+    local p matches=()
+    for p in /sys/class/pwm/pwmchip*; do
+        [[ -e $p/device ]] || continue
+        [[ $(readlink -f "$p/device") == */"$PWM_DEVICE" ]] && matches+=("$p")
+    done
+    (( ${#matches[@]} == 1 )) || die "expected one PWM chip for $PWM_DEVICE, found ${#matches[@]}"
+    echo "${matches[0]}"
+}
+
+case ${1:-} in
+    gpio) resolve_gpio ;;
+    pwm)  resolve_pwm ;;
+    *)    die "usage: x735-chip gpio|pwm" ;;
+esac

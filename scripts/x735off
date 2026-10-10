@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 I2S_DEV=fe203000.i2s
 I2S_DRIVER=/sys/bus/platform/drivers/bcm2835-i2s
-CHIP=/dev/gpiochip0
+CHIP=$(/usr/local/bin/x735-chip gpio)
 
 restore_audio() {
     if [ ! -L "$I2S_DRIVER/$I2S_DEV" ]; then

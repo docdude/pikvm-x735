@@ -3,7 +3,8 @@
 # events. Does not touch the GPIO12 handshake.
 set -Eeuo pipefail
 
-CHIP=${X735_CHIP:-gpiochip0}
+CHIP=${X735_CHIP:-}
+[[ -n $CHIP ]] || CHIP=$(/usr/local/bin/x735-chip gpio)
 BUTTON=${X735_BUTTON:-5}
 ACTION=${X735_ACTION:-log}
 DEBOUNCE=${X735_DEBOUNCE:-10ms}
